@@ -1,0 +1,2 @@
+vmName;vmSubscription;vmResourceGroup;vmTag_environment;csvComment
+bogusVm;bogusSubscription;bogusResourceGroup;bogusVmTagEnvironmentValue;some comment to be ignored by the script
