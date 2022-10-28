@@ -40,7 +40,7 @@ begin {
         New-Item -Path $OutputPath -ItemType Directory | Out-Null
     }
 
-    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    try{ Stop-Transcript | Out-Null } catch { <# Ignore errors - ErrorAction has no impact here #> }
     Start-Transcript -Path "$OutputPath\$(Get-Date -Format "yyyyMMdd")-$($MyInvocation.MyCommand.Name).log" -Append -UseMinimalHeader
     
     if ($False -eq (Test-Path $InputFilePath)) {
@@ -53,17 +53,15 @@ process {
 
     $inputContent | Group-Object -Property 'VmSubscription' | ForEach-Object {
         try {
-            Get-AzSubscription -SubscriptionName $_.Name | Out-Null
-            Set-AzContext -Subscription $_.Name | Out-Null
+            Get-AzSubscription -SubscriptionName $_.Name -ErrorAction Stop | Out-Null
+            Set-AzContext -Subscription $_.Name -ErrorAction Stop | Out-Null
             Write-Output "Processing subscription '$($_.Name)'"
         } catch {
-            Write-Host "test2"
             Write-Error "Could NOT set context to subscription '$($_.Name)'. The script will NOT process it."
             Continue
         }
     
-        $rgs = $_.Group | Group-Object -Property 'VmResourceGroup'
-    
+        $rgs = $_.Group | Group-Object -Property 'vmResourceGroup'
         $rgs | ForEach-Object -Parallel {
             $rgName = $_.Name
             $rgResource = Get-AzResourceGroup -Name $rgName
@@ -83,6 +81,27 @@ process {
             }
             Set-AzResourceGroup -Name $rgName -Tags $rgTags | Out-Null
             Write-Output "'$($rgName)' : finished updating tags"
+        }
+
+        $vms = $_.Group | Group-Object -Property 'vmName'
+        $vms | ForEach-Object -Parallel {
+            $vmName = $_.Name
+            $vmResource = Get-AzResource -ResourceGroupName $_.Group.VmResourceGroup -ResourceName $vmName
+            $vmTags = $vmResource.Tags
+
+            $tagsToApply = ($_.Group | Select-Object -First 1).PsObject.Properties | Where-Object {$_.Name -Like "vmTag_*"} | Select-Object Name, Value
+            $tagsToApply | ForEach-Object {
+                $tagName = ($_.Name).Replace("vmTag_","")
+                if ($vmTags.Keys -notcontains $tagName) {
+                    $vmTags += @{$tagName="$($_.Value)"}
+                } else {
+                    Write-Output "'$($vmName)' - '$($tagName)':'$($vmTags.$tagName)'"
+                    $vmTags.$tagName = $_.Value
+                }
+                Write-Output "'$($vmName)' + '$($tagName)':'$($_.Value)'"
+            }
+            $vmResource | Set-AzResource -Tag $vmTags -Force | Out-Null
+            Write-Output "'$($vmName)' : finished updating tags"
         }
     }
     Stop-Transcript
